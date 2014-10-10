@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-package com.lidroid.xutils.util.core;
+package com.lidroid.xutils.cache;
 
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -68,7 +68,8 @@ public class KeyExpiryMap<K, V> extends ConcurrentHashMap<K, Long> {
     public synchronized boolean containsKey(Object key) {
         boolean result = false;
         if (super.containsKey(key)) {
-            if (System.currentTimeMillis() < super.get(key)) {
+            Long expiryTimestamp = super.get(key);
+            if (expiryTimestamp != null && System.currentTimeMillis() < expiryTimestamp) {
                 result = true;
             } else {
                 this.remove(key);

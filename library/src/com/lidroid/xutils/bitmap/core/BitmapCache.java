@@ -19,13 +19,15 @@ import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.media.ExifInterface;
 import com.lidroid.xutils.BitmapUtils;
-import com.lidroid.xutils.bitmap.BitmapCommonUtils;
 import com.lidroid.xutils.bitmap.BitmapDisplayConfig;
 import com.lidroid.xutils.bitmap.BitmapGlobalConfig;
+import com.lidroid.xutils.bitmap.factory.BitmapFactory;
+import com.lidroid.xutils.cache.FileNameGenerator;
+import com.lidroid.xutils.cache.LruDiskCache;
+import com.lidroid.xutils.cache.LruMemoryCache;
 import com.lidroid.xutils.util.IOUtils;
 import com.lidroid.xutils.util.LogUtils;
-import com.lidroid.xutils.util.core.LruDiskCache;
-import com.lidroid.xutils.util.core.LruMemoryCache;
+import com.lidroid.xutils.util.OtherUtils;
 
 import java.io.*;
 
@@ -38,7 +40,7 @@ public class BitmapCache {
     private LruMemoryCache<MemoryCacheKey, Bitmap> mMemoryCache;
 
     private final Object mDiskCacheLock = new Object();
-    private boolean isDiskCacheReadied = false;
+    private volatile boolean isDiskCacheReady = false;
 
     private BitmapGlobalConfig globalConfig;
 
@@ -86,27 +88,24 @@ public class BitmapCache {
      * background thread.
      */
     public void initDiskCache() {
-        if (!globalConfig.isDiskCacheEnabled()) return;
-
         // Set up disk cache
         synchronized (mDiskCacheLock) {
-            if (mDiskLruCache == null || mDiskLruCache.isClosed()) {
+            if (globalConfig.isDiskCacheEnabled()) {
                 File diskCacheDir = new File(globalConfig.getDiskCachePath());
-                if (!diskCacheDir.exists()) {
-                    diskCacheDir.mkdirs();
-                }
-                long availableSpace = BitmapCommonUtils.getAvailableSpace(diskCacheDir);
-                long diskCacheSize = globalConfig.getDiskCacheSize();
-                diskCacheSize = availableSpace > diskCacheSize ? diskCacheSize : availableSpace;
-                try {
-                    mDiskLruCache = LruDiskCache.open(diskCacheDir, 1, 1, diskCacheSize);
-                    mDiskLruCache.setDiskCacheFileNameGenerator(globalConfig.getDiskCacheFileNameGenerator());
-                } catch (Throwable e) {
-                    mDiskLruCache = null;
-                    LogUtils.e(e.getMessage(), e);
+                if (diskCacheDir.exists() || diskCacheDir.mkdirs()) {
+                    long availableSpace = OtherUtils.getAvailableSpace(diskCacheDir);
+                    long diskCacheSize = globalConfig.getDiskCacheSize();
+                    diskCacheSize = availableSpace > diskCacheSize ? diskCacheSize : availableSpace;
+                    try {
+                        mDiskLruCache = LruDiskCache.open(diskCacheDir, 1, 1, diskCacheSize);
+                        mDiskLruCache.setFileNameGenerator(globalConfig.getFileNameGenerator());
+                    } catch (Throwable e) {
+                        mDiskLruCache = null;
+                        LogUtils.e(e.getMessage(), e);
+                    }
                 }
             }
-            isDiskCacheReadied = true;
+            isDiskCacheReady = true;
             mDiskCacheLock.notifyAll();
         }
     }
@@ -123,9 +122,9 @@ public class BitmapCache {
         }
     }
 
-    public void setDiskCacheFileNameGenerator(LruDiskCache.DiskCacheFileNameGenerator diskCacheFileNameGenerator) {
-        if (mDiskLruCache != null && diskCacheFileNameGenerator != null) {
-            mDiskLruCache.setDiskCacheFileNameGenerator(diskCacheFileNameGenerator);
+    public void setDiskCacheFileNameGenerator(FileNameGenerator fileNameGenerator) {
+        if (mDiskLruCache != null && fileNameGenerator != null) {
+            mDiskLruCache.setFileNameGenerator(fileNameGenerator);
         }
     }
 
@@ -137,48 +136,48 @@ public class BitmapCache {
         LruDiskCache.Snapshot snapshot = null;
 
         try {
-
             Bitmap bitmap = null;
             // try download to disk
             if (globalConfig.isDiskCacheEnabled()) {
                 synchronized (mDiskCacheLock) {
                     // Wait for disk cache to initialize
-                    while (!isDiskCacheReadied) {
+                    while (!isDiskCacheReady) {
                         try {
                             mDiskCacheLock.wait();
                         } catch (Throwable e) {
+                            break;
                         }
                     }
+                }
 
-                    if (mDiskLruCache != null) {
-                        try {
-                            snapshot = mDiskLruCache.get(uri);
-                            if (snapshot == null) {
-                                LruDiskCache.Editor editor = mDiskLruCache.edit(uri);
-                                if (editor != null) {
-                                    outputStream = editor.newOutputStream(DISK_CACHE_INDEX);
-                                    bitmapMeta.expiryTimestamp = globalConfig.getDownloader().downloadToStream(uri, outputStream, task);
-                                    if (bitmapMeta.expiryTimestamp < 0) {
-                                        editor.abort();
-                                        return null;
-                                    } else {
-                                        editor.setEntryExpiryTimestamp(bitmapMeta.expiryTimestamp);
-                                        editor.commit();
-                                    }
-                                    snapshot = mDiskLruCache.get(uri);
+                if (mDiskLruCache != null) {
+                    try {
+                        snapshot = mDiskLruCache.get(uri);
+                        if (snapshot == null) {
+                            LruDiskCache.Editor editor = mDiskLruCache.edit(uri);
+                            if (editor != null) {
+                                outputStream = editor.newOutputStream(DISK_CACHE_INDEX);
+                                bitmapMeta.expiryTimestamp = globalConfig.getDownloader().downloadToStream(uri, outputStream, task);
+                                if (bitmapMeta.expiryTimestamp < 0) {
+                                    editor.abort();
+                                    return null;
+                                } else {
+                                    editor.setEntryExpiryTimestamp(bitmapMeta.expiryTimestamp);
+                                    editor.commit();
                                 }
+                                snapshot = mDiskLruCache.get(uri);
                             }
-                            if (snapshot != null) {
-                                bitmapMeta.inputStream = snapshot.getInputStream(DISK_CACHE_INDEX);
-                                bitmap = decodeBitmapMeta(bitmapMeta, config);
-                                if (bitmap == null) {
-                                    bitmapMeta.inputStream = null;
-                                    mDiskLruCache.remove(uri);
-                                }
-                            }
-                        } catch (Throwable e) {
-                            LogUtils.e(e.getMessage(), e);
                         }
+                        if (snapshot != null) {
+                            bitmapMeta.inputStream = snapshot.getInputStream(DISK_CACHE_INDEX);
+                            bitmap = decodeBitmapMeta(bitmapMeta, config);
+                            if (bitmap == null) {
+                                bitmapMeta.inputStream = null;
+                                mDiskLruCache.remove(uri);
+                            }
+                        }
+                    } catch (Throwable e) {
+                        LogUtils.e(e.getMessage(), e);
                     }
                 }
             }
@@ -197,7 +196,7 @@ public class BitmapCache {
 
             if (bitmap != null) {
                 bitmap = rotateBitmapIfNeeded(uri, config, bitmap);
-                addBitmapToMemoryCache(uri, config, bitmap, bitmapMeta.expiryTimestamp);
+                bitmap = addBitmapToMemoryCache(uri, config, bitmap, bitmapMeta.expiryTimestamp);
             }
             return bitmap;
         } catch (Throwable e) {
@@ -210,11 +209,18 @@ public class BitmapCache {
         return null;
     }
 
-    private void addBitmapToMemoryCache(String uri, BitmapDisplayConfig config, Bitmap bitmap, long expiryTimestamp) throws IOException {
+    private Bitmap addBitmapToMemoryCache(String uri, BitmapDisplayConfig config, Bitmap bitmap, long expiryTimestamp) throws IOException {
+        if (config != null) {
+            BitmapFactory bitmapFactory = config.getBitmapFactory();
+            if (bitmapFactory != null) {
+                bitmap = bitmapFactory.cloneNew().createBitmap(bitmap);
+            }
+        }
         if (uri != null && bitmap != null && globalConfig.isMemoryCacheEnabled() && mMemoryCache != null) {
-            MemoryCacheKey key = new MemoryCacheKey(uri, config == null ? null : config.toString());
+            MemoryCacheKey key = new MemoryCacheKey(uri, config);
             mMemoryCache.put(key, bitmap, expiryTimestamp);
         }
+        return bitmap;
     }
 
     /**
@@ -226,7 +232,7 @@ public class BitmapCache {
      */
     public Bitmap getBitmapFromMemCache(String uri, BitmapDisplayConfig config) {
         if (mMemoryCache != null && globalConfig.isMemoryCacheEnabled()) {
-            MemoryCacheKey key = new MemoryCacheKey(uri, config == null ? null : config.toString());
+            MemoryCacheKey key = new MemoryCacheKey(uri, config);
             return mMemoryCache.get(key);
         }
         return null;
@@ -255,40 +261,41 @@ public class BitmapCache {
     public Bitmap getBitmapFromDiskCache(String uri, BitmapDisplayConfig config) {
         if (uri == null || !globalConfig.isDiskCacheEnabled()) return null;
         synchronized (mDiskCacheLock) {
-            while (!isDiskCacheReadied) {
+            while (!isDiskCacheReady) {
                 try {
                     mDiskCacheLock.wait();
                 } catch (Throwable e) {
+                    break;
                 }
             }
-            if (mDiskLruCache != null) {
-                LruDiskCache.Snapshot snapshot = null;
-                try {
-                    snapshot = mDiskLruCache.get(uri);
-                    if (snapshot != null) {
-                        Bitmap bitmap = null;
-                        if (config == null || config.isShowOriginal()) {
-                            bitmap = BitmapDecoder.decodeFileDescriptor(
-                                    snapshot.getInputStream(DISK_CACHE_INDEX).getFD());
-                        } else {
-                            bitmap = BitmapDecoder.decodeSampledBitmapFromDescriptor(
-                                    snapshot.getInputStream(DISK_CACHE_INDEX).getFD(),
-                                    config.getBitmapMaxSize(),
-                                    config.getBitmapConfig());
-                        }
-
-                        bitmap = rotateBitmapIfNeeded(uri, config, bitmap);
-                        addBitmapToMemoryCache(uri, config, bitmap, mDiskLruCache.getExpiryTimestamp(uri));
-                        return bitmap;
-                    }
-                } catch (Throwable e) {
-                    LogUtils.e(e.getMessage(), e);
-                } finally {
-                    IOUtils.closeQuietly(snapshot);
-                }
-            }
-            return null;
         }
+        if (mDiskLruCache != null) {
+            LruDiskCache.Snapshot snapshot = null;
+            try {
+                snapshot = mDiskLruCache.get(uri);
+                if (snapshot != null) {
+                    Bitmap bitmap = null;
+                    if (config == null || config.isShowOriginal()) {
+                        bitmap = BitmapDecoder.decodeFileDescriptor(
+                                snapshot.getInputStream(DISK_CACHE_INDEX).getFD());
+                    } else {
+                        bitmap = BitmapDecoder.decodeSampledBitmapFromDescriptor(
+                                snapshot.getInputStream(DISK_CACHE_INDEX).getFD(),
+                                config.getBitmapMaxSize(),
+                                config.getBitmapConfig());
+                    }
+
+                    bitmap = rotateBitmapIfNeeded(uri, config, bitmap);
+                    bitmap = addBitmapToMemoryCache(uri, config, bitmap, mDiskLruCache.getExpiryTimestamp(uri));
+                    return bitmap;
+                }
+            } catch (Throwable e) {
+                LogUtils.e(e.getMessage(), e);
+            } finally {
+                IOUtils.closeQuietly(snapshot);
+            }
+        }
+        return null;
     }
 
     /**
@@ -308,6 +315,7 @@ public class BitmapCache {
 
     public void clearDiskCache() {
         synchronized (mDiskCacheLock) {
+            isDiskCacheReady = false;
             if (mDiskLruCache != null && !mDiskLruCache.isClosed()) {
                 try {
                     mDiskLruCache.delete();
@@ -315,7 +323,6 @@ public class BitmapCache {
                     LogUtils.e(e.getMessage(), e);
                 }
                 mDiskLruCache = null;
-                isDiskCacheReadied = false;
             }
         }
         initDiskCache();
@@ -370,6 +377,7 @@ public class BitmapCache {
      */
     public void close() {
         synchronized (mDiskCacheLock) {
+            isDiskCacheReady = false;
             if (mDiskLruCache != null) {
                 try {
                     if (!mDiskLruCache.isClosed()) {
@@ -414,7 +422,7 @@ public class BitmapCache {
         return bitmap;
     }
 
-    private Bitmap rotateBitmapIfNeeded(String uri, BitmapDisplayConfig config, Bitmap bitmap) {
+    private synchronized Bitmap rotateBitmapIfNeeded(String uri, BitmapDisplayConfig config, Bitmap bitmap) {
         Bitmap result = bitmap;
         if (config != null && config.isAutoRotation()) {
             File bitmapFile = this.getBitmapFileFromDiskCache(uri);
@@ -457,9 +465,9 @@ public class BitmapCache {
         private String uri;
         private String subKey;
 
-        private MemoryCacheKey(String uri, String subKey) {
+        private MemoryCacheKey(String uri, BitmapDisplayConfig config) {
             this.uri = uri;
-            this.subKey = subKey;
+            this.subKey = config == null ? null : config.toString();
         }
 
         @Override

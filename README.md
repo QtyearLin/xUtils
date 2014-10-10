@@ -1,7 +1,7 @@
 ## xUtils简介
 * xUtils 包含了很多实用的android工具。
-* xUtils 最初源于Afinal框架，进行了大量重构，使得xUtils支持大文件上传，更全面的http请求协议支持(10种谓词)，拥有更加灵活的ORM，更多的事件注解支持且不受混淆影响...
-* xUitls最低兼容android 2.2 (api level 8)
+* xUtils 支持大文件上传，更全面的http请求协议支持(10种谓词)，拥有更加灵活的ORM，更多的事件注解支持且不受混淆影响...
+* xUitls 最低兼容android 2.2 (api level 8)
 
 ## 目前xUtils主要有四大模块：
 
@@ -60,8 +60,6 @@ db.save(user); // 使用saveBindingId保存实体时会为实体的id赋值
 ...
 // 查找
 Parent entity = db.findById(Parent.class, parent.getId());
-Parent entity = db.findFirst(entity);//通过entity的属性查找
-List<Parent> list = db.findAll(entity);//通过entity的属性查找
 List<Parent> list = db.findAll(Parent.class);//通过类型查找
 
 Parent Parent = db.findFirst(Selector.from(Parent.class).where("name","=","test"));
@@ -268,8 +266,8 @@ HttpHandler handler = http.download("http://apache.dataguru.cn/httpcomponents/ht
 });
 
 ...
-//调用stop()方法停止下载
-handler.stop();
+//调用cancel()方法停止下载
+handler.cancel();
 ...
 ```
 
@@ -307,4 +305,4 @@ LogUtils.d("wyouflf");
 ----
 # 关于作者
 * Email： <wyouflf@qq.com>, <wyouflf@gmail.com>
-* 有任何建议或者使用中遇到问题都可以给我发邮件, 你也可以加入QQ群：330445659(已满), 275967695，技术交流，idea分享 *_*
+* 有任何建议或者使用中遇到问题都可以给我发邮件, 你也可以加入QQ群：330445659(已满), 275967695, 257323060，技术交流，idea分享 *_*

@@ -20,21 +20,18 @@ import com.lidroid.xutils.util.IOUtils;
 import com.lidroid.xutils.util.LogUtils;
 import com.lidroid.xutils.util.OtherUtils;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.net.URL;
 import java.net.URLConnection;
 
-
-public class SimpleDownloader extends Downloader {
+public class DefaultDownloader extends Downloader {
 
     /**
      * Download bitmap to outputStream by uri.
      *
-     * @param uri
+     * @param uri          file path, assets path(assets/xxx) or http url.
      * @param outputStream
+     * @param task
      * @return The expiry time stamp or -1 if failed to download.
      */
     @Override
@@ -45,7 +42,7 @@ public class SimpleDownloader extends Downloader {
         URLConnection urlConnection = null;
         BufferedInputStream bis = null;
 
-        OtherUtils.trustAllSSLForHttpsURLConnection();
+        OtherUtils.trustAllHttpsURLConnection();
 
         long result = -1;
         long fileLen = 0;
@@ -76,13 +73,14 @@ public class SimpleDownloader extends Downloader {
 
             byte[] buffer = new byte[4096];
             int len = 0;
+            BufferedOutputStream out = new BufferedOutputStream(outputStream);
             while ((len = bis.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, len);
+                out.write(buffer, 0, len);
                 currCount += len;
                 if (task.isCancelled() || task.getTargetContainer() == null) return -1;
                 task.updateProgress(fileLen, currCount);
             }
-            outputStream.flush();
+            out.flush();
         } catch (Throwable e) {
             result = -1;
             LogUtils.e(e.getMessage(), e);

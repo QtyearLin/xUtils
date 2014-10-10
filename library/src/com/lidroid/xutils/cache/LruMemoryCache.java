@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-package com.lidroid.xutils.util.core;
+package com.lidroid.xutils.cache;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -69,14 +69,13 @@ public class LruMemoryCache<K, V> {
             throw new NullPointerException("key == null");
         }
 
-        // If expired, remove the entry.
-        if (!keyExpiryMap.containsKey(key)) {
-            this.remove(key);
-            return null;
-        }
-
         V mapValue;
         synchronized (this) {
+            // If expired, remove the entry.
+            if (!keyExpiryMap.containsKey(key)) {
+                this.remove(key);
+                return null;
+            }
             mapValue = map.get(key);
             if (mapValue != null) {
                 hitCount++;
